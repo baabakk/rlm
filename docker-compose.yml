@@ -1,0 +1,80 @@
+# Docker Compose V2 — RLM API Service
+# API:    http://127.0.0.1:26030
+# Docs:   http://127.0.0.1:26030/docs
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: rlm-api
+    ports:
+      - "127.0.0.1:${RLM_API_PORT:-26030}:26030"
+    env_file:
+      - .env
+    environment:
+      - RLM_REDIS_URL=${RLM_REDIS_URL:-redis://redis:6379/0}
+      - RLM_REDIS_PASSWORD=${RLM_REDIS_PASSWORD:-}
+      - RLM_API_WORKERS=${RLM_API_WORKERS:-4}
+      - RLM_API_LOG_LEVEL=${RLM_API_LOG_LEVEL:-info}
+    command: >
+      uvicorn api.main:app
+      --host 0.0.0.0
+      --port 26030
+      --workers ${RLM_API_WORKERS:-4}
+      --log-level ${RLM_API_LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:26030/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - rlm-network
+      - shared-webservices
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - RLM_REDIS_URL=${RLM_REDIS_URL:-redis://redis:6379/0}
+      - RLM_REDIS_PASSWORD=${RLM_REDIS_PASSWORD:-}
+      - RLM_STREAM_BLOCK_MS=${RLM_STREAM_BLOCK_MS:-5000}
+    command: ["python", "-m", "api.worker"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import redis; redis.from_url('${RLM_REDIS_URL:-redis://redis:6379/0}').ping()"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - rlm-network
+      - shared-webservices
+    deploy:
+      replicas: ${RLM_WORKER_REPLICAS:-4}
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+networks:
+  rlm-network:
+    driver: bridge
+  shared-webservices:
+    external: true
