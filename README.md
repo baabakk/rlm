@@ -135,6 +135,62 @@ If you use this code or repository in your research, please cite:
 }
 ```
 
+## API Service (Production Deployment)
+
+We provide a production-grade HTTP API service for serving RLM completions at scale. The service uses a queue-based architecture with FastAPI + Redis Streams + worker processes to handle thousands of concurrent requests.
+
+### Quick Start
+```bash
+cp .env.example .env
+# Edit .env with your LLM provider API keys and Redis URL
+
+docker compose up --build -d
+```
+
+The API is available at `http://localhost:26030` with interactive docs at `http://localhost:26030/docs`.
+
+### Usage
+```python
+import requests
+
+API = "http://localhost:26030"
+HEADERS = {"Authorization": "Bearer rlm-key-abc123"}
+
+# Submit a completion job (returns immediately)
+resp = requests.post(f"{API}/v1/completions", json={
+    "prompt": "Find all prime numbers up to 1000.",
+    "backend": "openai",
+    "model_name": "gpt-5-nano",
+}, headers=HEADERS)
+job_id = resp.json()["job_id"]
+
+# Poll for result
+resp = requests.get(f"{API}/v1/jobs/{job_id}", headers=HEADERS)
+print(resp.json()["result"]["response"])
+```
+
+### Architecture
+```
+Client → FastAPI (enqueue) → Redis Stream → Worker(s) (RLM.completion)
+           ↑                    ↑ ↓                ↓
+           └── poll/SSE ←── Redis Hash + Pub/Sub ──┘
+```
+
+- **API Server** — FastAPI with Uvicorn, handles enqueue/poll/SSE endpoints
+- **Redis Streams** — Reliable job queue with consumer groups and at-least-once delivery
+- **Workers** — Separate processes that run `RLM.completion()`, one job at a time, horizontally scalable via `docker compose up -d --scale worker=N`
+- **SSE Streaming** — Real-time iteration-by-iteration progress via `GET /v1/jobs/{id}/stream`
+
+### Endpoints
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/v1/completions` | Enqueue completion job → 202 `{job_id}` |
+| `GET` | `/v1/jobs/{job_id}` | Poll job status and result |
+| `GET` | `/v1/jobs/{job_id}/stream` | SSE stream of iteration events |
+| `GET` | `/health` | Health check (Redis, workers, queue depth) |
+
+All backends (OpenAI, Anthropic, Gemini, Azure, Portkey, OpenRouter, Vercel, vLLM, LiteLLM) are configurable via environment variables. See [API_SERVICE.md](API_SERVICE.md) for the full architecture document and configuration reference.
+
 ## Optional Debugging: Visualizing RLM Trajectories
 We additionally provide a simple visualizer tool to examine and view the code, sub-LM, and root-LM calls of an RLM trajectory. To save log files (`.jsonl`) on every completion call that can be viewed in the visualizer, initialize the `RLMLogger` object and pass it into the `RLM` on initialization:
 ```python
