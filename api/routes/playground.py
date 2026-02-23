@@ -230,14 +230,16 @@ async function submitPrompt(text) {
       body: JSON.stringify({ prompt: text })
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || err.error || res.statusText);
+      const text = await res.text().catch(() => "");
+      let msg = "";
+      try { const j = JSON.parse(text); msg = j.detail || j.error || ""; } catch {}
+      throw new Error(msg || res.status + " " + (res.statusText || "Error"));
     }
     const data = await res.json();
     jobId = data.job_id;
     log("info", "Job enqueued: " + jobId);
   } catch (e) {
-    log("failed", "Request failed: " + e.message);
+    log("failed", "Request failed: " + (e.message || e));
     setRunning(false);
     return;
   }
@@ -250,8 +252,10 @@ async function submitPrompt(text) {
       signal: abortCtrl.signal
     });
     if (!sseRes.ok) {
-      const err = await sseRes.json().catch(() => ({}));
-      throw new Error(err.detail || err.error || sseRes.statusText);
+      const text = await sseRes.text().catch(() => "");
+      let msg = "";
+      try { const j = JSON.parse(text); msg = j.detail || j.error || ""; } catch {}
+      throw new Error(msg || sseRes.status + " " + (sseRes.statusText || "Error"));
     }
     await readSSEStream(sseRes);
   } catch (e) {
