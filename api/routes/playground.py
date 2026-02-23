@@ -147,6 +147,7 @@ _PLAYGROUND_HTML = """\
         <option value="gemini:gemini-2.5-pro">gemini-2.5-pro</option>
       </optgroup>
       <optgroup label="Cerebras">
+        <option value="cerebras:gpt-oss-120b">GPT-OSS 120B</option>
         <option value="cerebras:llama-4-scout-17b-16e-instruct">Llama 4 Scout 17B</option>
         <option value="cerebras:llama3.3-70b">Llama 3.3 70B</option>
         <option value="cerebras:qwen-3-32b">Qwen 3 32B</option>
