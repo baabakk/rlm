@@ -119,6 +119,7 @@ _PLAYGROUND_HTML = """\
 
 <script>
 const API_KEY = "{{API_KEY}}";
+const BASE = window.location.pathname.replace(/\\/playground\\/?$/, "");
 const output = document.getElementById("output");
 const form = document.getElementById("form");
 const prompt = document.getElementById("prompt");
@@ -221,7 +222,7 @@ async function submitPrompt(text) {
 
   let jobId;
   try {
-    const res = await fetch("/v1/completions", {
+    const res = await fetch(BASE + "/v1/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -247,7 +248,7 @@ async function submitPrompt(text) {
   // Stream SSE via fetch (supports Authorization header unlike EventSource)
   abortCtrl = new AbortController();
   try {
-    const sseRes = await fetch("/v1/jobs/" + jobId + "/stream", {
+    const sseRes = await fetch(BASE + "/v1/jobs/" + jobId + "/stream", {
       headers: { "Authorization": "Bearer " + API_KEY },
       signal: abortCtrl.signal
     });
