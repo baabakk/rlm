@@ -134,6 +134,7 @@ def resolve_backend_kwargs(request: dict, settings: Settings) -> dict:
         "openrouter": settings.openrouter_api_key,
         "vercel": settings.vercel_api_key,
         "litellm": settings.litellm_api_key,
+        "cerebras": settings.cerebras_api_key,
         "vllm": "",
     }
 

@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     vercel_api_key: str = ""
     litellm_api_key: str = ""
+    cerebras_api_key: str = ""
     vllm_base_url: str = ""
 
     model_config = {"env_prefix": "RLM_", "env_file": ".env", "extra": "ignore"}

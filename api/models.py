@@ -28,6 +28,7 @@ class CompletionRequest(BaseModel):
             "vercel",
             "vllm",
             "litellm",
+            "cerebras",
         ]
         | None
     ) = None

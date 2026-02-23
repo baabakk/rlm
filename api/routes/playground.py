@@ -99,6 +99,22 @@ _PLAYGROUND_HTML = """\
   }
   button:hover { background: #7986cb; }
   button:disabled { background: #3a3d4a; color: #666; cursor: not-allowed; }
+  #toolbar {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 8px;
+    align-items: center;
+  }
+  #toolbar label { font-size: 12px; color: #868e96; }
+  select {
+    background: #1a1d2e;
+    border: 1px solid #2a2d3a;
+    border-radius: 4px;
+    color: #e0e0e0;
+    font-size: 13px;
+    padding: 4px 8px;
+  }
+  select:focus { outline: none; border-color: #5c6bc0; }
 </style>
 </head>
 <body>
@@ -111,6 +127,37 @@ _PLAYGROUND_HTML = """\
 <div id="output"></div>
 
 <div id="input-area">
+  <div id="toolbar">
+    <label>Model</label>
+    <select id="model-select">
+      <optgroup label="OpenAI">
+        <option value="openai:gpt-5-nano" selected>gpt-5-nano (default)</option>
+        <option value="openai:gpt-4o-mini">gpt-4o-mini</option>
+        <option value="openai:gpt-4o">gpt-4o</option>
+        <option value="openai:gpt-4.1-nano">gpt-4.1-nano</option>
+        <option value="openai:gpt-4.1-mini">gpt-4.1-mini</option>
+        <option value="openai:o4-mini">o4-mini</option>
+      </optgroup>
+      <optgroup label="Anthropic">
+        <option value="anthropic:claude-haiku-4-5-20251001">claude-haiku-4.5</option>
+        <option value="anthropic:claude-sonnet-4-6-20250514">claude-sonnet-4.6</option>
+      </optgroup>
+      <optgroup label="Gemini">
+        <option value="gemini:gemini-2.0-flash">gemini-2.0-flash</option>
+        <option value="gemini:gemini-2.5-pro">gemini-2.5-pro</option>
+      </optgroup>
+      <optgroup label="Cerebras">
+        <option value="cerebras:llama-4-scout-17b-16e-instruct">Llama 4 Scout 17B</option>
+        <option value="cerebras:llama3.3-70b">Llama 3.3 70B</option>
+        <option value="cerebras:qwen-3-32b">Qwen 3 32B</option>
+      </optgroup>
+      <optgroup label="Other">
+        <option value="openrouter:">OpenRouter (custom)</option>
+        <option value="litellm:">LiteLLM (custom)</option>
+        <option value="vllm:">vLLM (custom)</option>
+      </optgroup>
+    </select>
+  </div>
   <form id="form">
     <textarea id="prompt" rows="2" placeholder="Enter your prompt... (Ctrl+Enter to submit)"></textarea>
     <button type="submit" id="submit-btn">Run</button>
@@ -124,6 +171,7 @@ const output = document.getElementById("output");
 const form = document.getElementById("form");
 const prompt = document.getElementById("prompt");
 const submitBtn = document.getElementById("submit-btn");
+const modelSelect = document.getElementById("model-select");
 const status = document.getElementById("status");
 let abortCtrl = null;
 
@@ -215,10 +263,20 @@ async function readSSEStream(response) {
   }
 }
 
+function buildRequest(text) {
+  const val = modelSelect.value;
+  const [backend, model] = val.split(":");
+  const req = { prompt: text };
+  if (backend) req.backend = backend;
+  if (model) req.model_name = model;
+  return req;
+}
+
 async function submitPrompt(text) {
   cleanup();
   setRunning(true);
-  log("info", "Submitting prompt...");
+  const selected = modelSelect.options[modelSelect.selectedIndex].text;
+  log("info", "Submitting prompt (" + selected + ")...");
 
   let jobId;
   try {
@@ -228,7 +286,7 @@ async function submitPrompt(text) {
         "Content-Type": "application/json",
         "Authorization": "Bearer " + API_KEY
       },
-      body: JSON.stringify({ prompt: text })
+      body: JSON.stringify(buildRequest(text))
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
