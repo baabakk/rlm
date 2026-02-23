@@ -215,4 +215,4 @@ marimo/_lsp/
 __marimo__/
 API_SERVICE.md
 CLAUDE.md
-.claude/settings.local.json
+.claude/

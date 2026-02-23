@@ -11,7 +11,7 @@ from api import __version__
 from api.config import get_settings
 from api.queue import JobQueue
 from api.redis_client import close_redis, init_redis
-from api.routes import completions_router, health_router, jobs_router
+from api.routes import completions_router, health_router, jobs_router, playground_router
 
 logger = logging.getLogger("rlm-api")
 
@@ -71,6 +71,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(completions_router)
     app.include_router(jobs_router)
+    app.include_router(playground_router)
 
     return app
 
