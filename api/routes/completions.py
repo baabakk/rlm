@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from api.auth import verify_api_key
 from api.config import Settings, get_settings
@@ -23,6 +23,10 @@ async def create_completion(
     redis: aioredis.Redis = Depends(get_redis),
 ) -> CompletionResponse:
     """Enqueue a new RLM completion job. Returns immediately with a job_id."""
+    # Configurable prompt size check
+    if isinstance(body.prompt, str) and len(body.prompt) > settings.max_prompt_length:
+        raise HTTPException(status_code=413, detail="Prompt too large")
+
     await check_rate_limit(api_key, redis, settings)
 
     queue = request.app.state.queue
@@ -31,5 +35,5 @@ async def create_completion(
     return CompletionResponse(
         job_id=job_id,
         status=JobStatus.QUEUED,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )

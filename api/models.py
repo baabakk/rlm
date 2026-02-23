@@ -6,28 +6,34 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-
 # -- Request Models -----------------------------------------------------------
+
+
+_MAX_PROMPT_LENGTH = 1_000_000  # ~1MB of text
+_MAX_PROMPT_MESSAGES = 1000
 
 
 class CompletionRequest(BaseModel):
     """POST /v1/completions request body."""
 
     prompt: str | dict[str, Any] | list[dict[str, Any]]
-    backend: Literal[
-        "openai",
-        "anthropic",
-        "gemini",
-        "azure_openai",
-        "portkey",
-        "openrouter",
-        "vercel",
-        "vllm",
-        "litellm",
-    ] = "openai"
-    model_name: str = "gpt-5-nano"
-    max_depth: int = Field(default=1, ge=0, le=3)
-    max_iterations: int = Field(default=30, ge=1, le=100)
+    backend: (
+        Literal[
+            "openai",
+            "anthropic",
+            "gemini",
+            "azure_openai",
+            "portkey",
+            "openrouter",
+            "vercel",
+            "vllm",
+            "litellm",
+        ]
+        | None
+    ) = None
+    model_name: str | None = None
+    max_depth: int | None = Field(default=None, ge=0, le=3)
+    max_iterations: int | None = Field(default=None, ge=1, le=100)
     root_prompt: str | None = None
     idempotency_key: str | None = None
     backend_options: dict[str, Any] | None = None
@@ -35,10 +41,20 @@ class CompletionRequest(BaseModel):
     @field_validator("prompt")
     @classmethod
     def validate_prompt(cls, v: str | dict | list) -> str | dict | list:
-        if isinstance(v, str) and len(v.strip()) == 0:
-            raise ValueError("prompt must not be empty")
-        if isinstance(v, list) and len(v) == 0:
-            raise ValueError("prompt messages list must not be empty")
+        if isinstance(v, str):
+            if len(v.strip()) == 0:
+                raise ValueError("prompt must not be empty")
+            if len(v) > _MAX_PROMPT_LENGTH:
+                raise ValueError(
+                    f"prompt exceeds maximum length of {_MAX_PROMPT_LENGTH} characters"
+                )
+        if isinstance(v, list):
+            if len(v) == 0:
+                raise ValueError("prompt messages list must not be empty")
+            if len(v) > _MAX_PROMPT_MESSAGES:
+                raise ValueError(
+                    f"prompt messages list exceeds maximum of {_MAX_PROMPT_MESSAGES} messages"
+                )
         return v
 
 

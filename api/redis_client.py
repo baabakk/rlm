@@ -1,9 +1,20 @@
 from __future__ import annotations
 
-import redis.asyncio as aioredis
+from urllib.parse import urlparse, urlunparse
+
 import redis as sync_redis
+import redis.asyncio as aioredis
 
 from api.config import Settings
+
+
+def _inject_password(url: str, password: str) -> str:
+    """Inject password into a Redis URL, replacing any existing credentials."""
+    parsed = urlparse(url)
+    netloc = f":{password}@{parsed.hostname}"
+    if parsed.port:
+        netloc += f":{parsed.port}"
+    return urlunparse(parsed._replace(netloc=netloc))
 
 
 # -- Async client (FastAPI) ---------------------------------------------------
@@ -18,9 +29,7 @@ async def init_redis(settings: Settings) -> aioredis.Redis:
 
     url = settings.redis_url
     if settings.redis_password:
-        # Inject password into URL if provided separately
-        scheme, rest = url.split("://", 1)
-        url = f"{scheme}://:{settings.redis_password}@{rest}"
+        url = _inject_password(url, settings.redis_password)
 
     _pool = aioredis.ConnectionPool.from_url(
         url,
@@ -57,8 +66,7 @@ def get_sync_redis(settings: Settings) -> sync_redis.Redis:
     """Create a synchronous Redis client for worker processes."""
     url = settings.redis_url
     if settings.redis_password:
-        scheme, rest = url.split("://", 1)
-        url = f"{scheme}://:{settings.redis_password}@{rest}"
+        url = _inject_password(url, settings.redis_password)
 
     return sync_redis.Redis.from_url(
         url,

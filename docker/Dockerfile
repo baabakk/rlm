@@ -32,7 +32,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         wget curl git \
     && rm -rf /var/lib/apt/lists/*
 
+# Copy installed packages from builder first
+COPY --from=builder /install /usr/local
+
 # Common Python packages available to LocalREPL exec'd code
+# Installed after builder copy so these versions take precedence
 RUN pip install --no-cache-dir \
         numpy \
         pandas \
@@ -44,9 +48,6 @@ RUN pip install --no-cache-dir \
         tqdm \
         python-dateutil \
         regex
-
-# Copy installed packages from builder
-COPY --from=builder /install /usr/local
 
 # Application code
 WORKDIR /app

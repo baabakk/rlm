@@ -26,6 +26,10 @@ async def get_job(
     if not job_data:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    # Ownership check — return 404 to avoid revealing job existence
+    if job_data.get("api_key") and job_data["api_key"] != api_key:
+        raise HTTPException(status_code=404, detail="Job not found")
+
     result = None
     if job_data.get("status") == JobStatus.COMPLETED.value:
         result_data = await queue.get_job_result(job_id)
@@ -63,24 +67,12 @@ async def stream_job(
     if not job_data:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # If already terminal, return the final event immediately
-    if job_data["status"] in (JobStatus.COMPLETED.value, JobStatus.FAILED.value):
+    # Ownership check — return 404 to avoid revealing job existence
+    if job_data.get("api_key") and job_data["api_key"] != api_key:
+        raise HTTPException(status_code=404, detail="Job not found")
 
-        async def terminal_stream():
-            if job_data["status"] == JobStatus.COMPLETED.value:
-                result = await queue.get_job_result(job_id)
-                yield f"event: completed\ndata: {json.dumps(result or {})}\n\n"
-            else:
-                error = job_data.get("error", "Unknown error")
-                yield f"event: failed\ndata: {json.dumps({'error': error})}\n\n"
-
-        return StreamingResponse(
-            terminal_stream(),
-            media_type="text/event-stream",
-            headers=_sse_headers(),
-        )
-
-    # Subscribe to the job's Pub/Sub channel for live events
+    # Subscribe to Pub/Sub BEFORE checking terminal status to avoid race
+    # where the job completes between the status check and subscription.
     async def event_stream():
         pubsub = redis.pubsub()
         channel = f"rlm:job:{job_id}:events"
@@ -89,10 +81,22 @@ async def stream_job(
         try:
             yield ": connected\n\n"
 
+            # Check status after subscribing — if already terminal, emit and close
+            current = await queue.get_job_status(job_id)
+            if current and current.get("status") in (
+                JobStatus.COMPLETED.value,
+                JobStatus.FAILED.value,
+            ):
+                if current["status"] == JobStatus.COMPLETED.value:
+                    result = await queue.get_job_result(job_id)
+                    yield f"event: completed\ndata: {json.dumps(result or {})}\n\n"
+                else:
+                    error = current.get("error", "Unknown error")
+                    yield f"event: failed\ndata: {json.dumps({'error': error})}\n\n"
+                return
+
             while True:
-                message = await pubsub.get_message(
-                    ignore_subscribe_messages=True, timeout=30.0
-                )
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=30.0)
 
                 if message and message["type"] == "message":
                     event_data = json.loads(message["data"])

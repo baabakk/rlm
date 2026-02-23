@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import redis.asyncio as aioredis
 
@@ -23,24 +23,22 @@ class JobQueue:
     async def ensure_consumer_group(self) -> None:
         """Create the consumer group if it doesn't exist. MKSTREAM creates the stream."""
         try:
-            await self.redis.xgroup_create(
-                self.stream, self.group, id="0", mkstream=True
-            )
+            await self.redis.xgroup_create(self.stream, self.group, id="0", mkstream=True)
         except Exception:
             pass  # Group already exists
 
     async def enqueue(self, request: CompletionRequest, api_key: str) -> str:
         """Add a job to the stream. Returns job_id."""
         job_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
-        # Check idempotency
+        # Atomic idempotency check via SET NX
         if request.idempotency_key:
-            existing = await self.redis.get(
-                f"rlm:idempotency:{request.idempotency_key}"
-            )
-            if existing:
-                return existing
+            idem_key = f"rlm:idempotency:{request.idempotency_key}"
+            was_set = await self.redis.set(idem_key, job_id, nx=True, ex=self.result_ttl)
+            if not was_set:
+                existing = await self.redis.get(idem_key)
+                return existing  # type: ignore[return-value]
 
         # Store job metadata hash
         job_key = f"rlm:job:{job_id}"
@@ -53,10 +51,9 @@ class JobQueue:
                 "api_key": api_key,
                 "request": request_json,
                 "current_iteration": "0",
-                "max_iterations": str(request.max_iterations),
+                "max_iterations": str(request.max_iterations or 0),
             },
         )
-        await self.redis.expire(job_key, self.result_ttl)
 
         # Add to stream
         msg_id = await self.redis.xadd(
@@ -68,14 +65,6 @@ class JobQueue:
 
         # Store stream message ID for later ACK reference
         await self.redis.hset(job_key, "stream_message_id", msg_id)
-
-        # Store idempotency mapping
-        if request.idempotency_key:
-            await self.redis.set(
-                f"rlm:idempotency:{request.idempotency_key}",
-                job_id,
-                ex=self.result_ttl,
-            )
 
         return job_id
 

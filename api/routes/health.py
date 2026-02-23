@@ -27,9 +27,7 @@ async def health(request: Request) -> HealthResponse:
     active_workers = 0
     try:
         now = time.time()
-        active_workers = await redis.zcount(
-            "rlm:workers:heartbeat", now - 30, "+inf"
-        )
+        active_workers = await redis.zcount("rlm:workers:heartbeat", now - 30, "+inf")
     except Exception:
         pass
 

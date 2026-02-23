@@ -6,24 +6,25 @@ Each worker process handles one job at a time (RLM is not thread-safe).
 
 Entry point: python -m api.worker
 """
+
 from __future__ import annotations
 
 import json
 import logging
 import os
+import platform
 import signal
 import socket
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import redis as sync_redis
 
-from rlm import RLM
-from rlm.core.types import RLMIteration, RLMMetadata
-
 from api.config import Settings, get_settings
 from api.redis_client import get_sync_redis
+from rlm import RLM
+from rlm.core.types import RLMIteration, RLMMetadata
 
 logger = logging.getLogger("rlm-worker")
 
@@ -34,12 +35,16 @@ _shutdown = threading.Event()
 
 
 def _handle_signal(signum: int, _frame) -> None:
-    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+    logger.info("Received signal %s, initiating graceful shutdown...", signum)
     _shutdown.set()
 
 
-signal.signal(signal.SIGTERM, _handle_signal)
-signal.signal(signal.SIGINT, _handle_signal)
+class JobTimeoutError(Exception):
+    pass
+
+
+def _handle_alarm(signum: int, _frame) -> None:
+    raise JobTimeoutError("Job exceeded timeout limit")
 
 
 # -- Streaming Callback Logger ------------------------------------------------
@@ -72,32 +77,37 @@ class StreamingCallbackLogger:
     def log(self, iteration: RLMIteration) -> None:
         self._iteration_count += 1
         self.redis.hset(self.job_key, "current_iteration", str(self._iteration_count))
-        self._publish("iteration", {
-            "iteration": self._iteration_count,
-            **iteration.to_dict(),
-        })
+        self._publish(
+            "iteration",
+            {
+                "iteration": self._iteration_count,
+                **iteration.to_dict(),
+            },
+        )
 
     @property
     def iteration_count(self) -> int:
         return self._iteration_count
 
     def _publish(self, event_type: str, data: dict) -> None:
-        event = json.dumps({
-            "job_id": self.job_id,
-            "event_type": event_type,
-            "data": data,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        event = json.dumps(
+            {
+                "job_id": self.job_id,
+                "event_type": event_type,
+                "data": data,
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+        )
         try:
             self.redis.publish(f"rlm:job:{self.job_id}:events", event)
         except Exception as e:
-            logger.warning(f"Failed to publish event for job {self.job_id}: {e}")
+            logger.warning("Failed to publish event for job %s: %s", self.job_id, e)
 
 
 # -- Backend Key Resolution ---------------------------------------------------
 
 # Safe backend_options keys that users may pass per-request
-_SAFE_BACKEND_OPTIONS = {"base_url", "max_tokens", "temperature", "top_p"}
+_SAFE_BACKEND_OPTIONS = {"max_tokens", "temperature", "top_p"}
 
 
 def resolve_backend_kwargs(request: dict, settings: Settings) -> dict:
@@ -136,10 +146,7 @@ def resolve_backend_kwargs(request: dict, settings: Settings) -> dict:
         kwargs["azure_endpoint"] = settings.azure_openai_endpoint
         kwargs["api_version"] = settings.azure_openai_api_version
     elif backend == "vllm":
-        kwargs["base_url"] = (
-            request.get("backend_options", {}).get("base_url")
-            or settings.vllm_base_url
-        )
+        kwargs["base_url"] = settings.vllm_base_url
 
     return kwargs
 
@@ -151,10 +158,16 @@ def _heartbeat_loop(
     redis_client: sync_redis.Redis,
     consumer_name: str,
 ) -> None:
-    """Background thread that updates worker heartbeat in Redis."""
+    """Background thread that updates worker heartbeat and prunes stale entries."""
+    cleanup_counter = 0
     while not _shutdown.is_set():
         try:
-            redis_client.zadd("rlm:workers:heartbeat", {consumer_name: time.time()})
+            now = time.time()
+            redis_client.zadd("rlm:workers:heartbeat", {consumer_name: now})
+            cleanup_counter += 1
+            if cleanup_counter >= 6:  # Every ~60s
+                redis_client.zremrangebyscore("rlm:workers:heartbeat", "-inf", now - 60)
+                cleanup_counter = 0
         except Exception:
             pass
         _shutdown.wait(10)
@@ -174,27 +187,47 @@ def _process_job(
     """Process a single RLM completion job."""
     request = json.loads(request_json)
     job_key = f"rlm:job:{job_id}"
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(UTC).isoformat()
+
+    # Resolve None defaults from settings
+    if request.get("backend") is None:
+        request["backend"] = settings.default_backend
+    if request.get("model_name") is None:
+        request["model_name"] = settings.default_model
+    if request.get("max_depth") is None:
+        request["max_depth"] = settings.default_max_depth
+    if request.get("max_iterations") is None:
+        request["max_iterations"] = settings.default_max_iterations
 
     # Mark as processing
-    redis_client.hset(job_key, mapping={
-        "status": "processing",
-        "started_at": now_iso,
-        "worker_id": consumer_name,
-    })
+    redis_client.hset(
+        job_key,
+        mapping={
+            "status": "processing",
+            "started_at": now_iso,
+            "worker_id": consumer_name,
+        },
+    )
 
     callback_logger = StreamingCallbackLogger(redis_client, job_id, job_key)
     callback_logger._publish("started", {"worker_id": consumer_name})
 
+    # Set job timeout (Unix only)
+    use_alarm = platform.system() != "Windows"
+    old_alarm_handler = None
     try:
+        if use_alarm:
+            old_alarm_handler = signal.signal(signal.SIGALRM, _handle_alarm)
+            signal.alarm(settings.job_timeout_seconds)
+
         backend_kwargs = resolve_backend_kwargs(request, settings)
 
         rlm_instance = RLM(
             backend=request["backend"],
             backend_kwargs=backend_kwargs,
             environment="local",
-            max_depth=request.get("max_depth", settings.default_max_depth),
-            max_iterations=request.get("max_iterations", settings.default_max_iterations),
+            max_depth=request["max_depth"],
+            max_iterations=request["max_iterations"],
             logger=callback_logger,
             verbose=False,
         )
@@ -204,6 +237,9 @@ def _process_job(
             root_prompt=request.get("root_prompt"),
         )
 
+        if use_alarm:
+            signal.alarm(0)
+
         # Store result
         result_dict = result.to_dict()
         redis_client.set(
@@ -211,25 +247,49 @@ def _process_job(
             json.dumps(result_dict),
             ex=settings.job_result_ttl,
         )
-        redis_client.hset(job_key, mapping={
-            "status": "completed",
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-        })
+        redis_client.hset(
+            job_key,
+            mapping={
+                "status": "completed",
+                "completed_at": datetime.now(UTC).isoformat(),
+            },
+        )
         redis_client.expire(job_key, settings.job_result_ttl)
 
         callback_logger._publish("completed", result_dict)
-        logger.info(f"Job {job_id} completed in {result.execution_time:.2f}s")
+        logger.info("Job %s completed in %.2fs", job_id, result.execution_time)
+
+    except JobTimeoutError:
+        logger.error("Job %s timed out after %ds", job_id, settings.job_timeout_seconds)
+        redis_client.hset(
+            job_key,
+            mapping={
+                "status": "failed",
+                "completed_at": datetime.now(UTC).isoformat(),
+                "error": f"Job timed out after {settings.job_timeout_seconds} seconds",
+            },
+        )
+        redis_client.expire(job_key, settings.job_result_ttl)
+        callback_logger._publish("failed", {"error": "Job timed out"})
 
     except Exception as e:
-        logger.error(f"Job {job_id} failed: {e}", exc_info=True)
-        redis_client.hset(job_key, mapping={
-            "status": "failed",
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-            "error": str(e),
-        })
+        logger.error("Job %s failed: %s", job_id, e, exc_info=True)
+        redis_client.hset(
+            job_key,
+            mapping={
+                "status": "failed",
+                "completed_at": datetime.now(UTC).isoformat(),
+                "error": str(e),
+            },
+        )
+        redis_client.expire(job_key, settings.job_result_ttl)
         callback_logger._publish("failed", {"error": str(e)})
 
     finally:
+        if use_alarm:
+            signal.alarm(0)
+            if old_alarm_handler is not None:
+                signal.signal(signal.SIGALRM, old_alarm_handler)
         redis_client.xack(settings.stream_name, settings.consumer_group, msg_id)
 
 
@@ -241,8 +301,8 @@ def _claim_stale_messages(
     consumer_name: str,
     settings: Settings,
     min_idle_ms: int = 60_000,
-) -> None:
-    """Claim messages pending for > min_idle_ms (from crashed workers)."""
+) -> list[tuple[str, dict]]:
+    """Claim messages pending for > min_idle_ms. Returns claimed entries."""
     result = redis_client.xautoclaim(
         name=settings.stream_name,
         groupname=settings.consumer_group,
@@ -251,28 +311,29 @@ def _claim_stale_messages(
         start_id="0-0",
         count=10,
     )
+    claimed: list[tuple[str, dict]] = []
     if result and len(result) >= 2:
-        claimed = result[1]
-        for msg_id, fields in claimed:
+        for msg_id, fields in result[1]:
             if fields:
                 job_id = fields.get("job_id", "unknown")
-                logger.info(f"Reclaimed stale job {job_id} (msg_id={msg_id})")
+                logger.info("Reclaimed stale job %s (msg_id=%s)", job_id, msg_id)
                 job_key = f"rlm:job:{job_id}"
                 redis_client.hset(job_key, "status", "queued")
-                _process_job(
-                    redis_client, job_id, fields["request"],
-                    msg_id, consumer_name, settings,
-                )
+                claimed.append((msg_id, fields))
+    return claimed
 
 
 # -- Main Worker Loop ---------------------------------------------------------
 
 
 def run_worker() -> None:
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
     settings = get_settings()
     consumer_name = f"{settings.consumer_prefix}-{socket.gethostname()}-{os.getpid()}"
 
-    logger.info(f"Starting worker: {consumer_name}")
+    logger.info("Starting worker: %s", consumer_name)
 
     redis_client = get_sync_redis(settings)
 
@@ -285,20 +346,35 @@ def run_worker() -> None:
         pass
 
     # Start heartbeat thread
-    hb = threading.Thread(
-        target=_heartbeat_loop, args=(redis_client, consumer_name), daemon=True
-    )
+    hb = threading.Thread(target=_heartbeat_loop, args=(redis_client, consumer_name), daemon=True)
     hb.start()
 
-    logger.info(
-        f"Worker {consumer_name} listening on stream '{settings.stream_name}'"
+    logger.info("Worker %s listening on stream '%s'", consumer_name, settings.stream_name)
+    logger.warning(
+        "Worker uses 'local' environment (unsandboxed exec). "
+        "Do not process untrusted prompts without switching to a sandboxed environment."
     )
 
     # Recover stale jobs from crashed workers
+    claimed: list[tuple[str, dict]] = []
     try:
-        _claim_stale_messages(redis_client, consumer_name, settings)
+        claimed = _claim_stale_messages(redis_client, consumer_name, settings)
     except Exception as e:
-        logger.warning(f"Failed to claim stale messages: {e}")
+        logger.warning("Failed to claim stale messages: %s", e)
+
+    for msg_id, fields in claimed:
+        if _shutdown.is_set():
+            break
+        job_id = fields.get("job_id", "unknown")
+        logger.info("Processing reclaimed job %s", job_id)
+        _process_job(
+            redis_client,
+            job_id,
+            fields["request"],
+            msg_id,
+            consumer_name,
+            settings,
+        )
 
     # Main consume loop
     while not _shutdown.is_set():
@@ -321,18 +397,22 @@ def run_worker() -> None:
                         break
 
                     job_id = fields.get("job_id", "unknown")
-                    logger.info(f"Processing job {job_id} (msg_id={msg_id})")
+                    logger.info("Processing job %s (msg_id=%s)", job_id, msg_id)
                     _process_job(
-                        redis_client, job_id, fields["request"],
-                        msg_id, consumer_name, settings,
+                        redis_client,
+                        job_id,
+                        fields["request"],
+                        msg_id,
+                        consumer_name,
+                        settings,
                     )
 
         except Exception as e:
-            logger.error(f"Worker loop error: {e}", exc_info=True)
+            logger.error("Worker loop error: %s", e, exc_info=True)
             time.sleep(1)
 
     # Cleanup
-    logger.info(f"Worker {consumer_name} shutting down")
+    logger.info("Worker %s shutting down", consumer_name)
     redis_client.zrem("rlm:workers:heartbeat", consumer_name)
     redis_client.close()
 

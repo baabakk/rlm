@@ -1,28 +1,57 @@
 # Docker Compose V2 — RLM API Service
 # API:    http://127.0.0.1:26030
 # Docs:   http://127.0.0.1:26030/docs
+#
+# Usage:
+#   docker compose up                          # external Redis expected
+#   docker compose --profile redis up          # includes local Redis
+#   docker compose up --scale worker=8         # scale workers
+
+x-rlm-build: &rlm-build
+  image: rlm-service:latest
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
 
 services:
+  redis:
+    image: redis:7-alpine
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - rlm-network
+    profiles:
+      - redis
+
   api:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
+    <<: *rlm-build
     container_name: rlm-api
     ports:
       - "127.0.0.1:${RLM_API_PORT:-26030}:26030"
     env_file:
       - .env
-    environment:
-      - RLM_REDIS_URL=${RLM_REDIS_URL:-redis://redis:6379/0}
-      - RLM_REDIS_PASSWORD=${RLM_REDIS_PASSWORD:-}
-      - RLM_API_WORKERS=${RLM_API_WORKERS:-4}
-      - RLM_API_LOG_LEVEL=${RLM_API_LOG_LEVEL:-info}
-    command: >
-      uvicorn api.main:app
-      --host 0.0.0.0
-      --port 26030
-      --workers ${RLM_API_WORKERS:-4}
-      --log-level ${RLM_API_LOG_LEVEL:-info}
+    command:
+      - sh
+      - -c
+      - >
+        uvicorn api.main:app
+        --host 0.0.0.0
+        --port 26030
+        --workers "$${RLM_API_WORKERS:-4}"
+        --log-level "$${RLM_API_LOG_LEVEL:-info}"
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:26030/health"]
       interval: 30s
@@ -30,6 +59,10 @@ services:
       start_period: 15s
       retries: 3
     restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+        required: false
     networks:
       - rlm-network
       - shared-webservices
@@ -43,23 +76,21 @@ services:
           memory: 256M
 
   worker:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
+    <<: *rlm-build
     env_file:
       - .env
-    environment:
-      - RLM_REDIS_URL=${RLM_REDIS_URL:-redis://redis:6379/0}
-      - RLM_REDIS_PASSWORD=${RLM_REDIS_PASSWORD:-}
-      - RLM_STREAM_BLOCK_MS=${RLM_STREAM_BLOCK_MS:-5000}
     command: ["python", "-m", "api.worker"]
     healthcheck:
-      test: ["CMD", "python", "-c", "import redis; redis.from_url('${RLM_REDIS_URL:-redis://redis:6379/0}').ping()"]
+      test: ["CMD-SHELL", "kill -0 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       start_period: 10s
       retries: 3
     restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+        required: false
     networks:
       - rlm-network
       - shared-webservices
@@ -72,6 +103,9 @@ services:
         reservations:
           cpus: "0.5"
           memory: 512M
+
+volumes:
+  redis-data:
 
 networks:
   rlm-network:

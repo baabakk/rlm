@@ -27,10 +27,18 @@ class Settings(BaseSettings):
 
     # --- Worker ---
     worker_batch_size: int = 1
+    job_timeout_seconds: int = 600  # 10 minutes
+
+    # --- Request Limits ---
+    max_prompt_length: int = 1_000_000  # ~1MB of text
 
     # --- Auth ---
     api_keys: str = ""  # comma-separated valid API keys
     api_key_source: Literal["env", "redis"] = "env"
+    auth_disabled: bool = False  # must be explicitly set to bypass auth
+
+    # --- CORS ---
+    cors_origins: str = "*"  # comma-separated allowed origins
 
     # --- Rate Limiting ---
     rate_limit_enabled: bool = True
@@ -67,3 +75,9 @@ def get_settings() -> Settings:
     if _settings is None:
         _settings = Settings()
     return _settings
+
+
+def reset_settings() -> None:
+    """Reset the settings singleton. Use in tests only."""
+    global _settings
+    _settings = None

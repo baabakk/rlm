@@ -21,11 +21,16 @@ async def verify_api_key(
     """
     token = credentials.credentials
 
+    if settings.auth_disabled:
+        return token
+
     if settings.api_key_source == "env":
         valid_keys = {k.strip() for k in settings.api_keys.split(",") if k.strip()}
         if not valid_keys:
-            # No keys configured — auth disabled (development mode)
-            return token
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="No API keys configured. Set RLM_API_KEYS or RLM_AUTH_DISABLED=true.",
+            )
         if token not in valid_keys:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

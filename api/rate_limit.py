@@ -1,11 +1,32 @@
 from __future__ import annotations
 
 import time
+import uuid
 
 import redis.asyncio as aioredis
 from fastapi import HTTPException, status
 
 from api.config import Settings
+
+# Lua script for atomic sliding-window rate limiting.
+# Prunes expired entries, checks count, and only adds if under limit.
+_RATE_LIMIT_SCRIPT = """
+local key = KEYS[1]
+local window_start = tonumber(ARGV[1])
+local now = tonumber(ARGV[2])
+local limit = tonumber(ARGV[3])
+local ttl = tonumber(ARGV[4])
+local member = ARGV[5]
+
+redis.call('ZREMRANGEBYSCORE', key, '-inf', window_start)
+local count = redis.call('ZCARD', key)
+if count >= limit then
+    return 0
+end
+redis.call('ZADD', key, now, member)
+redis.call('EXPIRE', key, ttl)
+return 1
+"""
 
 
 async def check_rate_limit(
@@ -16,8 +37,8 @@ async def check_rate_limit(
     """
     Sliding-window rate limiter using Redis sorted sets.
 
+    Uses a Lua script for atomic check-and-add to prevent race conditions.
     Each request is a member scored by its Unix timestamp.
-    Expired members (outside the window) are pruned on every check.
     """
     if not settings.rate_limit_enabled:
         return
@@ -25,19 +46,20 @@ async def check_rate_limit(
     now = time.time()
     window_start = now - settings.rate_limit_window_seconds
     key = f"rlm:ratelimit:{api_key}"
+    member = f"{now}:{uuid.uuid4().hex[:8]}"
 
-    pipe = redis.pipeline()
-    pipe.zremrangebyscore(key, "-inf", window_start)  # prune expired
-    pipe.zcard(key)  # count current
-    pipe.zadd(key, {f"{now}": now})  # add this request
-    pipe.expire(key, settings.rate_limit_window_seconds + 10)
-    results = await pipe.execute()
+    allowed = await redis.eval(
+        _RATE_LIMIT_SCRIPT,
+        1,
+        key,
+        str(window_start),
+        str(now),
+        str(settings.rate_limit_requests),
+        str(settings.rate_limit_window_seconds + 10),
+        member,
+    )
 
-    current_count = results[1]
-
-    if current_count >= settings.rate_limit_requests:
-        # Remove the entry we just added since we're rejecting
-        await redis.zrem(key, f"{now}")
+    if not allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=(
