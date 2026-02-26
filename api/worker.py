@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import pathlib
 import platform
 import signal
 import socket
@@ -153,6 +154,8 @@ def resolve_backend_kwargs(request: dict, settings: Settings) -> dict:
 
 # -- Heartbeat ----------------------------------------------------------------
 
+_HEARTBEAT_FILE = pathlib.Path("/tmp/worker_heartbeat")
+
 
 def _heartbeat_loop(
     redis_client: sync_redis.Redis,
@@ -164,6 +167,10 @@ def _heartbeat_loop(
         try:
             now = time.time()
             redis_client.zadd("rlm:workers:heartbeat", {consumer_name: now})
+            try:
+                _HEARTBEAT_FILE.write_text(str(now))
+            except OSError:
+                pass
             cleanup_counter += 1
             if cleanup_counter >= 6:  # Every ~60s
                 redis_client.zremrangebyscore("rlm:workers:heartbeat", "-inf", now - 60)
