@@ -130,32 +130,33 @@ _PLAYGROUND_HTML = """\
   <div id="toolbar">
     <label>Model</label>
     <select id="model-select">
-      <optgroup label="OpenAI">
-        <option value="openai:gpt-5-nano" selected>gpt-5-nano (default)</option>
-        <option value="openai:gpt-4o-mini">gpt-4o-mini</option>
-        <option value="openai:gpt-4o">gpt-4o</option>
-        <option value="openai:gpt-4.1-nano">gpt-4.1-nano</option>
-        <option value="openai:gpt-4.1-mini">gpt-4.1-mini</option>
-        <option value="openai:o4-mini">o4-mini</option>
+      <optgroup label="OpenAI" data-backend="openai">
+        <option value="openai:gpt-5.1-codex-max" selected>GPT-5.1 Codex Max</option>
+        <option value="openai:gpt-5.2-codex">GPT-5.2 Codex</option>
+        <option value="openai:gpt-5.3-codex">GPT-5.3 Codex</option>
+        <option value="openai:gpt-5-nano">GPT-5 Nano</option>
+        <option value="openai:gpt-4.1-nano">GPT-4.1 Nano</option>
+        <option value="openai:gpt-4.1-mini">GPT-4.1 Mini</option>
       </optgroup>
-      <optgroup label="Anthropic">
-        <option value="anthropic:claude-haiku-4-5-20251001">claude-haiku-4.5</option>
-        <option value="anthropic:claude-sonnet-4-6-20250514">claude-sonnet-4.6</option>
+      <optgroup label="Anthropic" data-backend="anthropic">
+        <option value="anthropic:claude-opus-4-6-20250610">Claude Opus 4.6</option>
+        <option value="anthropic:claude-sonnet-4-6-20250514">Claude Sonnet 4.6</option>
+        <option value="anthropic:claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
       </optgroup>
-      <optgroup label="Gemini">
-        <option value="gemini:gemini-2.0-flash">gemini-2.0-flash</option>
-        <option value="gemini:gemini-2.5-pro">gemini-2.5-pro</option>
+      <optgroup label="Gemini" data-backend="gemini">
+        <option value="gemini:gemini-2.0-flash">Gemini 2.0 Flash</option>
+        <option value="gemini:gemini-2.5-pro">Gemini 2.5 Pro</option>
       </optgroup>
-      <optgroup label="Cerebras">
+      <optgroup label="Cerebras" data-backend="cerebras">
         <option value="cerebras:gpt-oss-120b">GPT-OSS 120B</option>
         <option value="cerebras:llama-4-scout-17b-16e-instruct">Llama 4 Scout 17B</option>
         <option value="cerebras:llama3.3-70b">Llama 3.3 70B</option>
         <option value="cerebras:qwen-3-32b">Qwen 3 32B</option>
       </optgroup>
       <optgroup label="Other">
-        <option value="openrouter:">OpenRouter (custom)</option>
-        <option value="litellm:">LiteLLM (custom)</option>
-        <option value="vllm:">vLLM (custom)</option>
+        <option value="openrouter:" data-backend="openrouter">OpenRouter (custom)</option>
+        <option value="litellm:" data-backend="litellm">LiteLLM (custom)</option>
+        <option value="vllm:" data-backend="vllm">vLLM (custom)</option>
       </optgroup>
     </select>
   </div>
@@ -167,7 +168,31 @@ _PLAYGROUND_HTML = """\
 
 <script>
 const API_KEY = "{{API_KEY}}";
+const AVAILABLE_BACKENDS = {{AVAILABLE_BACKENDS}};
 const BASE = window.location.pathname.replace(/\\/playground\\/?$/, "");
+
+// Remove providers that have no API key configured on the server
+(function filterModels() {
+  const select = document.getElementById("model-select");
+  for (const group of [...select.querySelectorAll("optgroup")]) {
+    const backend = group.dataset.backend;
+    if (backend && !AVAILABLE_BACKENDS[backend]) {
+      group.remove();
+      continue;
+    }
+    // Also filter individual options in the "Other" group
+    for (const opt of [...group.querySelectorAll("option[data-backend]")]) {
+      if (!AVAILABLE_BACKENDS[opt.dataset.backend]) opt.remove();
+    }
+    // Remove the group if it has no options left
+    if (group.querySelectorAll("option").length === 0) group.remove();
+  }
+  // If the selected option was removed, select the first available
+  if (!select.value || !select.querySelector("option[value='" + CSS.escape(select.value) + "']")) {
+    const first = select.querySelector("option");
+    if (first) first.selected = true;
+  }
+})();
 const output = document.getElementById("output");
 const form = document.getElementById("form");
 const prompt = document.getElementById("prompt");
@@ -349,6 +374,8 @@ prompt.addEventListener("keydown", (e) => {
 @router.get("/playground", response_class=HTMLResponse)
 async def playground(request: Request) -> HTMLResponse:
     """Serve the RLM test playground page."""
+    import json
+
     settings = request.app.state.settings
     # Use the first configured API key, fall back to default
     api_key = "rlm-key-change-me"
@@ -356,5 +383,21 @@ async def playground(request: Request) -> HTMLResponse:
         first = settings.api_keys.split(",")[0].strip()
         if first:
             api_key = first
+
+    # Build map of backend -> available (has API key or base_url configured)
+    available = {
+        "openai": bool(settings.openai_api_key),
+        "anthropic": bool(settings.anthropic_api_key),
+        "gemini": bool(settings.gemini_api_key),
+        "azure_openai": bool(settings.azure_openai_api_key),
+        "cerebras": bool(settings.cerebras_api_key),
+        "portkey": bool(settings.portkey_api_key),
+        "openrouter": bool(settings.openrouter_api_key),
+        "vercel": bool(settings.vercel_api_key),
+        "litellm": bool(settings.litellm_api_key),
+        "vllm": bool(settings.vllm_base_url),
+    }
+
     html = _PLAYGROUND_HTML.replace("{{API_KEY}}", api_key)
+    html = html.replace("{{AVAILABLE_BACKENDS}}", json.dumps(available))
     return HTMLResponse(content=html)
