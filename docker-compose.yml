@@ -54,10 +54,10 @@ services:
       - RLM_STREAM_BLOCK_MS=${RLM_STREAM_BLOCK_MS:-5000}
     command: ["python", "-m", "api.worker"]
     healthcheck:
-      test: ["CMD", "python", "-c", "import redis; redis.from_url('${RLM_REDIS_URL:-redis://redis:6379/0}').ping()"]
+      test: ["CMD-SHELL", "python -c \"import os,time; assert time.time()-os.path.getmtime('/tmp/worker_heartbeat')<60\""]
       interval: 30s
-      timeout: 10s
-      start_period: 10s
+      timeout: 5s
+      start_period: 15s
       retries: 3
     restart: unless-stopped
     networks:
