@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     redis_password: str = ""
     redis_max_connections: int = 20
 
+    # --- MongoDB ---
+    mongodb_uri: str = ""
+    mongodb_database: str = "rlm"
+
     # --- Job Queue (Redis Streams) ---
     stream_name: str = "rlm:jobs"
     consumer_group: str = "rlm-workers"

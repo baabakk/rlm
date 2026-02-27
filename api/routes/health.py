@@ -37,10 +37,22 @@ async def health(request: Request) -> HealthResponse:
     except Exception:
         pass
 
+    # MongoDB connectivity (None when not configured)
+    mongo_ok = None
+    mongo_db = getattr(request.app.state, "mongo_db", None)
+    if mongo_db is not None:
+        mongo_ok = False
+        try:
+            await mongo_db.command("ping")
+            mongo_ok = True
+        except Exception:
+            pass
+
     return HealthResponse(
         status="healthy" if redis_ok else "degraded",
         version=__version__,
         redis_connected=redis_ok,
+        mongo_connected=mongo_ok,
         active_workers=active_workers,
         pending_jobs=pending,
     )

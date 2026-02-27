@@ -9,6 +9,8 @@ from fastapi.responses import JSONResponse
 
 from api import __version__
 from api.config import get_settings
+from api.mongo_client import close_mongo, init_mongo
+from api.persistence import AsyncJobStore
 from api.queue import JobQueue
 from api.redis_client import close_redis, init_redis
 from api.routes import completions_router, health_router, jobs_router, playground_router
@@ -28,18 +30,25 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing Redis connection...")
     redis = await init_redis(settings)
 
-    queue = JobQueue(redis, settings)
+    # MongoDB (optional — disabled when RLM_MONGODB_URI is empty)
+    mongo_client, mongo_db = await init_mongo(settings)
+    job_store = AsyncJobStore(mongo_db) if mongo_db else None
+
+    queue = JobQueue(redis, settings, job_store=job_store)
     await queue.ensure_consumer_group()
 
     app.state.settings = settings
     app.state.redis = redis
     app.state.queue = queue
+    app.state.mongo_db = mongo_db
+    app.state.job_store = job_store
 
     logger.info("RLM API v%s started on port %s", __version__, settings.api_port)
     yield
 
     # Shutdown
     logger.info("Shutting down...")
+    await close_mongo()
     await close_redis()
 
 

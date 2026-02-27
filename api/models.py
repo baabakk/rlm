@@ -134,6 +134,7 @@ class HealthResponse(BaseModel):
     status: str = "healthy"
     version: str
     redis_connected: bool
+    mongo_connected: bool | None = None
     active_workers: int
     pending_jobs: int
 

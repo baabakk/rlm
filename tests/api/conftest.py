@@ -24,6 +24,8 @@ def mock_settings():
     """Settings instance with known test values. No .env file loading."""
     return Settings(
         _env_file=None,
+        mongodb_uri="",
+        mongodb_database="rlm_test",
         api_keys="test-key-1,test-key-2",
         api_key_source="env",
         auth_disabled=False,
@@ -57,6 +59,7 @@ def mock_settings():
         openrouter_api_key="or-test",
         vercel_api_key="",
         litellm_api_key="",
+        cerebras_api_key="",
         vllm_base_url="http://vllm:8000/v1",
     )
 

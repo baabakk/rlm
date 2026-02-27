@@ -13,12 +13,13 @@ from api.models import CompletionRequest, JobStatus
 class JobQueue:
     """Abstraction over Redis Streams for RLM job management."""
 
-    def __init__(self, redis_client: aioredis.Redis, settings: Settings):
+    def __init__(self, redis_client: aioredis.Redis, settings: Settings, job_store=None):
         self.redis = redis_client
         self.stream = settings.stream_name
         self.group = settings.consumer_group
         self.result_ttl = settings.job_result_ttl
         self.max_len = settings.job_max_len
+        self.job_store = job_store
 
     async def ensure_consumer_group(self) -> None:
         """Create the consumer group if it doesn't exist. MKSTREAM creates the stream."""
@@ -65,6 +66,10 @@ class JobQueue:
 
         # Store stream message ID for later ACK reference
         await self.redis.hset(job_key, "stream_message_id", msg_id)
+
+        # Persist to MongoDB (fail-safe)
+        if self.job_store:
+            await self.job_store.create_job(job_id, request, api_key)
 
         return job_id
 

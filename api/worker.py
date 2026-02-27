@@ -23,6 +23,8 @@ from datetime import UTC, datetime
 import redis as sync_redis
 
 from api.config import Settings, get_settings
+from api.mongo_client import get_sync_mongo
+from api.persistence import SyncJobStore
 from api.redis_client import get_sync_redis
 from rlm import RLM
 from rlm.core.types import RLMIteration, RLMMetadata
@@ -66,10 +68,12 @@ class StreamingCallbackLogger:
         redis_client: sync_redis.Redis,
         job_id: str,
         job_key: str,
+        job_store=None,
     ):
         self.redis = redis_client
         self.job_id = job_id
         self.job_key = job_key
+        self.job_store = job_store
         self._iteration_count = 0
 
     def log_metadata(self, metadata: RLMMetadata) -> None:
@@ -103,6 +107,10 @@ class StreamingCallbackLogger:
             self.redis.publish(f"rlm:job:{self.job_id}:events", event)
         except Exception as e:
             logger.warning("Failed to publish event for job %s: %s", self.job_id, e)
+
+        # Persist to MongoDB (fail-safe)
+        if self.job_store:
+            self.job_store.log_event(self.job_id, event_type, data)
 
 
 # -- Backend Key Resolution ---------------------------------------------------
@@ -191,6 +199,7 @@ def _process_job(
     msg_id: str,
     consumer_name: str,
     settings: Settings,
+    job_store=None,
 ) -> None:
     """Process a single RLM completion job."""
     request = json.loads(request_json)
@@ -216,8 +225,10 @@ def _process_job(
             "worker_id": consumer_name,
         },
     )
+    if job_store:
+        job_store.mark_processing(job_id, consumer_name)
 
-    callback_logger = StreamingCallbackLogger(redis_client, job_id, job_key)
+    callback_logger = StreamingCallbackLogger(redis_client, job_id, job_key, job_store=job_store)
     callback_logger._publish("started", {"worker_id": consumer_name})
 
     # Set job timeout (Unix only)
@@ -264,20 +275,25 @@ def _process_job(
         )
         redis_client.expire(job_key, settings.job_result_ttl)
 
+        if job_store:
+            job_store.mark_completed(job_id, result_dict)
         callback_logger._publish("completed", result_dict)
         logger.info("Job %s completed in %.2fs", job_id, result.execution_time)
 
     except JobTimeoutError:
         logger.error("Job %s timed out after %ds", job_id, settings.job_timeout_seconds)
+        timeout_error = f"Job timed out after {settings.job_timeout_seconds} seconds"
         redis_client.hset(
             job_key,
             mapping={
                 "status": "failed",
                 "completed_at": datetime.now(UTC).isoformat(),
-                "error": f"Job timed out after {settings.job_timeout_seconds} seconds",
+                "error": timeout_error,
             },
         )
         redis_client.expire(job_key, settings.job_result_ttl)
+        if job_store:
+            job_store.mark_failed(job_id, timeout_error)
         callback_logger._publish("failed", {"error": "Job timed out"})
 
     except Exception as e:
@@ -291,6 +307,8 @@ def _process_job(
             },
         )
         redis_client.expire(job_key, settings.job_result_ttl)
+        if job_store:
+            job_store.mark_failed(job_id, str(e))
         callback_logger._publish("failed", {"error": str(e)})
 
     finally:
@@ -345,6 +363,17 @@ def run_worker() -> None:
 
     redis_client = get_sync_redis(settings)
 
+    # Initialize MongoDB persistence (optional)
+    mongo_client = None
+    job_store = None
+    try:
+        mongo_client, mongo_db = get_sync_mongo(settings)
+        if mongo_db is not None:
+            job_store = SyncJobStore(mongo_db)
+            logger.info("MongoDB persistence enabled")
+    except Exception as e:
+        logger.warning("MongoDB not available, persistence disabled: %s", e)
+
     # Ensure consumer group exists
     try:
         redis_client.xgroup_create(
@@ -382,6 +411,7 @@ def run_worker() -> None:
             msg_id,
             consumer_name,
             settings,
+            job_store=job_store,
         )
 
     # Main consume loop
@@ -413,6 +443,7 @@ def run_worker() -> None:
                         msg_id,
                         consumer_name,
                         settings,
+                        job_store=job_store,
                     )
 
         except Exception as e:
@@ -423,6 +454,8 @@ def run_worker() -> None:
     logger.info("Worker %s shutting down", consumer_name)
     redis_client.zrem("rlm:workers:heartbeat", consumer_name)
     redis_client.close()
+    if mongo_client:
+        mongo_client.close()
 
 
 if __name__ == "__main__":

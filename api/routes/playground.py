@@ -131,12 +131,12 @@ _PLAYGROUND_HTML = """\
     <label>Model</label>
     <select id="model-select">
       <optgroup label="OpenAI" data-backend="openai">
-        <option value="openai:gpt-5.1-codex-max" selected>GPT-5.1 Codex Max</option>
-        <option value="openai:gpt-5.2-codex">GPT-5.2 Codex</option>
-        <option value="openai:gpt-5.3-codex">GPT-5.3 Codex</option>
-        <option value="openai:gpt-5-nano">GPT-5 Nano</option>
-        <option value="openai:gpt-4.1-nano">GPT-4.1 Nano</option>
+        <option value="openai:gpt-4.1" selected>GPT-4.1</option>
         <option value="openai:gpt-4.1-mini">GPT-4.1 Mini</option>
+        <option value="openai:gpt-4.1-nano">GPT-4.1 Nano</option>
+        <option value="openai:gpt-4o">GPT-4o</option>
+        <option value="openai:gpt-4o-mini">GPT-4o Mini</option>
+        <option value="openai:o3-mini">o3-mini</option>
       </optgroup>
       <optgroup label="Anthropic" data-backend="anthropic">
         <option value="anthropic:claude-opus-4-6-20250610">Claude Opus 4.6</option>
