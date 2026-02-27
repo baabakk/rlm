@@ -17,6 +17,8 @@ services:
       - RLM_REDIS_PASSWORD=${RLM_REDIS_PASSWORD:-}
       - RLM_API_WORKERS=${RLM_API_WORKERS:-4}
       - RLM_API_LOG_LEVEL=${RLM_API_LOG_LEVEL:-info}
+      - RLM_MONGODB_URI=${RLM_MONGODB_URI:-mongodb://admin:ABigSupersecretR%40m74anbeh@mongo:27017/rlm?authSource=admin}
+      - RLM_MONGODB_DATABASE=${RLM_MONGODB_DATABASE:-rlm}
     command: >
       uvicorn api.main:app
       --host 0.0.0.0
@@ -52,6 +54,8 @@ services:
       - RLM_REDIS_URL=${RLM_REDIS_URL:-redis://redis:6379/0}
       - RLM_REDIS_PASSWORD=${RLM_REDIS_PASSWORD:-}
       - RLM_STREAM_BLOCK_MS=${RLM_STREAM_BLOCK_MS:-5000}
+      - RLM_MONGODB_URI=${RLM_MONGODB_URI:-mongodb://admin:ABigSupersecretR%40m74anbeh@mongo:27017/rlm?authSource=admin}
+      - RLM_MONGODB_DATABASE=${RLM_MONGODB_DATABASE:-rlm}
     command: ["python", "-m", "api.worker"]
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import os,time; assert time.time()-os.path.getmtime('/tmp/worker_heartbeat')<60\""]

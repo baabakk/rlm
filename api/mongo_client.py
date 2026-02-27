@@ -24,21 +24,27 @@ async def init_mongo(settings: Settings):
 
     from motor.motor_asyncio import AsyncIOMotorClient
 
-    _async_client = AsyncIOMotorClient(settings.mongodb_uri)
+    _async_client = AsyncIOMotorClient(settings.mongodb_uri, serverSelectionTimeoutMS=5000)
     _async_db = _async_client[settings.mongodb_database]
 
-    # Verify connectivity
-    await _async_client.admin.command("ping")
-    logger.info("MongoDB connected: %s", settings.mongodb_database)
+    try:
+        await _async_client.admin.command("ping")
+        logger.info("MongoDB connected: %s", settings.mongodb_database)
 
-    # Create indexes (idempotent — no-ops if they already exist)
-    await _async_db.jobs.create_index("job_id", unique=True)
-    await _async_db.jobs.create_index("created_at")
-    await _async_db.jobs.create_index("status")
-    await _async_db.jobs.create_index("api_key")
-    await _async_db.jobs.create_index("backend")
-    await _async_db.events.create_index([("job_id", 1), ("timestamp", 1)])
-    await _async_db.events.create_index("event_type")
+        # Create indexes (idempotent — no-ops if they already exist)
+        await _async_db.jobs.create_index("job_id", unique=True)
+        await _async_db.jobs.create_index("created_at")
+        await _async_db.jobs.create_index("status")
+        await _async_db.jobs.create_index("api_key")
+        await _async_db.jobs.create_index("backend")
+        await _async_db.events.create_index([("job_id", 1), ("timestamp", 1)])
+        await _async_db.events.create_index("event_type")
+    except Exception as e:
+        logger.warning("MongoDB connection failed, persistence disabled: %s", e)
+        _async_client.close()
+        _async_client = None
+        _async_db = None
+        return None, None
 
     return _async_client, _async_db
 
@@ -70,7 +76,12 @@ def get_sync_mongo(settings: Settings):
 
     from pymongo import MongoClient
 
-    client = MongoClient(settings.mongodb_uri)
+    client = MongoClient(settings.mongodb_uri, serverSelectionTimeoutMS=5000)
     db = client[settings.mongodb_database]
-    client.admin.command("ping")
+    try:
+        client.admin.command("ping")
+    except Exception as e:
+        logger.warning("MongoDB connection failed (worker), persistence disabled: %s", e)
+        client.close()
+        return None, None
     return client, db
