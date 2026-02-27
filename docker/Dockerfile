@@ -21,7 +21,9 @@ RUN pip install --no-cache-dir --prefix=/install . \
         "fastapi>=0.115.0" \
         "uvicorn[standard]>=0.32.0" \
         "redis[hiredis]>=5.2.0" \
-        "pydantic-settings>=2.6.0"
+        "pydantic-settings>=2.6.0" \
+        "pymongo>=4.7.0" \
+        "motor>=3.4.0"
 
 
 # -- Runtime stage ------------------------------------------------------------
