@@ -57,7 +57,7 @@ async def get_mongo_db():
 async def close_mongo():
     """Shutdown: close the async MongoDB client."""
     global _async_client, _async_db
-    if _async_client:
+    if _async_client is not None:
         _async_client.close()
     _async_client = None
     _async_db = None
