@@ -454,7 +454,7 @@ def run_worker() -> None:
     logger.info("Worker %s shutting down", consumer_name)
     redis_client.zrem("rlm:workers:heartbeat", consumer_name)
     redis_client.close()
-    if mongo_client:
+    if mongo_client is not None:
         mongo_client.close()
 
 

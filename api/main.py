@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):
 
     # MongoDB (optional — disabled when RLM_MONGODB_URI is empty)
     mongo_client, mongo_db = await init_mongo(settings)
-    job_store = AsyncJobStore(mongo_db) if mongo_db else None
+    job_store = AsyncJobStore(mongo_db) if mongo_db is not None else None
 
     queue = JobQueue(redis, settings, job_store=job_store)
     await queue.ensure_consumer_group()
