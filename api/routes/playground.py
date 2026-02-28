@@ -139,9 +139,9 @@ _PLAYGROUND_HTML = """\
         <option value="openai:o3-mini">o3-mini</option>
       </optgroup>
       <optgroup label="Anthropic" data-backend="anthropic">
-        <option value="anthropic:claude-opus-4-6-20250610">Claude Opus 4.6</option>
-        <option value="anthropic:claude-sonnet-4-6-20250514">Claude Sonnet 4.6</option>
-        <option value="anthropic:claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+        <option value="anthropic:claude-opus-4-6">Claude Opus 4.6</option>
+        <option value="anthropic:claude-sonnet-4-6">Claude Sonnet 4.6</option>
+        <option value="anthropic:claude-haiku-4-5">Claude Haiku 4.5</option>
       </optgroup>
       <optgroup label="Gemini" data-backend="gemini">
         <option value="gemini:gemini-2.0-flash">Gemini 2.0 Flash</option>
